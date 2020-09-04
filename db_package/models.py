@@ -1,5 +1,8 @@
 from .app import *
 from .parameter import *
+import hashlib
+from sqlalchemy.dialects.mysql import BIGINT
+import random
 
 user_class      = db.Table(
                    'user_class',
@@ -12,11 +15,13 @@ student_parent  = db.Table(
                    db.Column('student_id', db.Integer, db.ForeignKey('student.id')),
                    db.Column('parent_id', db.Integer, db.ForeignKey('parent.id'))
                   )
-                  
+
+
 class User(db.Model):
   __table__name = 'user'
   id           = db.Column(db.Integer, primary_key=True)
   account      = db.Column(db.String(80), nullable=False, unique=True)
+  hash_account = db.Column(BIGINT(unsigned=True), nullable=False, unique=True)
   password     = db.Column(db.String(191), nullable=False)
   email        = db.Column(db.String(80))
   phone        = db.Column(db.String(80))
@@ -47,8 +52,8 @@ class User(db.Model):
   classes = db.relationship(
               '_Class', 
               secondary=user_class, 
-              lazy='subquery',
-              backref=db.backref('user', lazy=True)
+              lazy='dynamic',
+              backref=db.backref('user', lazy='dynamic')
             )
             
   def create_user(**options):
@@ -63,11 +68,22 @@ class User(db.Model):
     db.session.add(user)
     db.session.commit()
     return user
+  
+  def add_to_class(self, class_object):
+    if class_object == None:
+      return None
+    self.classes.append(class_object)
+    db.session.commit()
+    return 1
     
   def read_user_by_account(account):
-    user    = User.query.filter_by(account=account)
+    hash_account = int(hashlib.md5(account.encode('utf-8')).hexdigest(), 16) % 18446744073709551615
+    user    = User.query.filter_by(hash_account=hash_account)
     return user.first()  
-    
+  
+  def read_user_by_id(user_id):
+    user    = User.query.filter_by(id=user_id)
+    return user.first()
   
   def __init__(self, user_parameter):
     self.account   = user_parameter['account']
@@ -75,6 +91,7 @@ class User(db.Model):
     self.email     = user_parameter['email']
     self.phone     = user_parameter['phone']
     self.create_at = user_parameter['create_at']
+    self.hash_account = int(hashlib.md5(self.account.encode('utf-8')).hexdigest(), 16) % 18446744073709551615
     
   def __repr__(self):
     return 'id:%s, account:%s' % \
@@ -84,11 +101,18 @@ class Student(db.Model):
   __table__name = 'student'
   id            = db.Column(db.Integer, primary_key=True)
   student_name  = db.Column(db.String(80), nullable=False)
-  user_id       = db.Column(db.Integer, db.ForeignKey('user.id')) 
-  class_id      = db.Column(db.Integer, db.ForeignKey('class.id'))
+  user_id       = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) 
+  class_id      = db.Column(db.Integer, db.ForeignKey('class.id'), nullable=False)
   
   grade         = db.relationship(
                     'Grade',
+                    backref = 'student',
+                    cascade = "all,delete",
+                    lazy    = 'dynamic'
+                  )
+  
+  status        = db.relationship(
+                    'Status',
                     backref = 'student',
                     cascade = "all,delete",
                     lazy    = 'dynamic'
@@ -98,15 +122,19 @@ class Student(db.Model):
                     'Parent', 
                     secondary=student_parent, 
                     lazy='subquery',
-                    backref=db.backref('student', lazy=True)
+                    backref=db.backref('student', lazy='dynamic')
                   )
                   
-  def create_student(**options):
+  def create_student(user_object, class_object, **options):
+    if user_object == None or class_object == None:
+      return None
     student_parm = dict(const_student_parameter)
     for arg in options.items():
       if arg[0] in const_student_parameter:
         student_parm[arg[0]] = arg[1]
     student = Student(student_parm)
+    student.user_id  = user_object.id
+    student.class_id = class_object.id 
     db.session.add(student)
     db.session.commit()
     return student
@@ -114,26 +142,21 @@ class Student(db.Model):
   def read_student_by_id(student_id):
     student = Student.query.filter_by(id=student_id)
     return student.first()
-
-  def read_students_by_name(student_name):
-    student = Student.query.filter_by(student_name=student_name)
-    return student.all()
-    
-  def read_student_by_name(student_name):
-    student = Student.query.filter_by(student_name=student_name)
-    return student.first()
-
+  
   def assign_to_user(self, user_object):
+    if user_object == None:
+      return None
     self.user_id = user_object.id
-    db.session.commit()
     return 1
   
   def assign_to_class(self, class_object):
+    if class_object == None:
+      return None
     self.class_id = class_object.id
     db.session.commit()
     return 1
   
-  def assign_to_parent(self, parent_object):
+  def add_to_parent(self, parent_object):
     self.parents.append(parent_object)
     db.session.commit()
     return 1
@@ -149,37 +172,52 @@ class Parent(db.Model):
   __table__name = 'parent'
   id            = db.Column(db.Integer, primary_key=True)
   parent_name   = db.Column(db.String(80))
-  user_id       = db.Column(db.Integer, db.ForeignKey('user.id'))
-  class_id      = db.Column(db.Integer, db.ForeignKey('class.id'))
+  user_id       = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+  class_id      = db.Column(db.Integer, db.ForeignKey('class.id'), nullable=False)
   
-  def create_parent(**options):
+  def create_parent(user_object, class_object, **options):
+    if user_object == None or class_object == None:
+      return None
     parent_parm = dict(const_parent_parameter)
     for arg in options.items():
       if arg[0] in const_parent_parameter:
         parent_parm[arg[0]] = arg[1]
     parent = Parent(parent_parm)
+    parent.user_id  = user_object.id
+    parent.class_id = class_object.id 
     db.session.add(parent)
     db.session.commit()
     return parent
-    
-  def read_parent_by_name(parent_name):
-    parent  = Parent.query.filter_by(parent_name=parent_name)
+  
+  def read_parent_by_id(parent_id):
+    parent  = Parent.query.filter_by(id=parent_id)
     return parent.first()
 
   def read_parents_by_name(parent_name):
     parent  = Parent.query.filter_by(parent_name=parent_name)
     return parent.all()
-
+  
   def assign_to_user(self, user_object):
+    if user_object == None:
+      return None
     self.user_id = user_object.id
     db.session.commit()
     return 1
-  
+    
   def assign_to_class(self, class_object):
+    if class_object == None:
+      return None
     self.class_id = class_object.id
     db.session.commit()
     return 1
-
+  
+  def add_to_student(self, student_object):
+    if student_object == None:
+      return None
+    self.student.append(student_object)
+    db.session.commit()
+    return 1
+  
   def __init__(self, parent_parameter):
     self.parent_name = parent_parameter['parent_name']
   
@@ -191,66 +229,82 @@ class Teacher(db.Model):
   __table__name = 'teacher'
   id            = db.Column(db.Integer, primary_key=True)
   teacher_name  = db.Column(db.String(80))
-  user_id       = db.Column(db.Integer, db.ForeignKey('user.id'))
-  class_id      = db.Column(db.Integer, db.ForeignKey('class.id'))
+  user_id       = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+  class_id      = db.Column(db.Integer, db.ForeignKey('class.id'), nullable=False)
   
-  def create_teacher(**options):
+  def create_teacher(user_object, class_object, **options):
+    if user_object == None or class_object == None:
+      return None
     teacher_parm = dict(const_teacher_parameter)
     for arg in options.items():
       if arg[0] in const_teacher_parameter:
         teacher_parm[arg[0]] = arg[1]
     teacher = Teacher(teacher_parm)
+    teacher.user_id  = user_object.id
+    teacher.class_id = class_object.id 
     db.session.add(teacher)
     db.session.commit()
     return teacher
   
-  def read_teacher_by_name(teacher_name):
-    teacher  = Teacher.query.filter_by(teacher_name=teacher_name)
-    return teacher.first()
-    
-  def read_teachers_by_name(teacher_name):
-    teacher  = Teacher.query.filter_by(teacher_name=teacher_name)
-  
   def assign_to_user(self, user_object):
+    if user_object == None:
+      return None
     self.user_id = user_object.id
     db.session.commit()
     return 1
-  
+
   def assign_to_class(self, class_object):
+    if class_object == None:
+      return None
     self.class_id = class_object.id
     db.session.commit()
     return 1
     
+  def read_teacher_by_id(teacher_id):
+    teacher  = Teacher.query.filter_by(id=teacher_id)
+    return teacher.first()
+  
   def __init__(self, teacher_parameter):
     self.teacher_name = teacher_parameter['teacher_name']
   
   def __repr__(self):
-    return 'id:%s teacher_name:%s, user_id:%s' % \
+    return 'teacher_id:%s teacher_name:%s, user_id:%s' % \
             (self.id, self.teacher_name, self.user_id)
             
 class Grade(db.Model):
   __table__name = 'grade'
   id            = db.Column(db.Integer, primary_key=True)
+  date          = db.Column(db.String(80))
+  subject       = db.Column(db.String(80))
   grade_name    = db.Column(db.String(80))
   grade_value   = db.Column(db.String(80))
   student_id    = db.Column(db.Integer, db.ForeignKey('student.id'))
   
-  def create_grade(**options):
+  def create_grade(student_object, **options):
+    if student_object == None:
+      return None
     grade_parm = dict(const_grade_parameter)
     for arg in options.items():
       if arg[0] in const_grade_parameter:
         grade_parm[arg[0]] = arg[1]
-    grade   = Grade(grade_parm)
+    grade = Grade(grade_parm)
+    grade.student_id = student_object.id
     db.session.add(grade)
     db.session.commit()
     return grade
   
+  def read_grade_by_id(grade_id):
+    grade  = Grade.query.filter_by(id=grade_id)
+    return grade.first()
+    
   def assign_to_student(self, student_object):
     self.student_id = student_object.id
     db.session.commit()
     return 1
   
   def __init__(self, grade_parameter):
+    self.date        = grade_parameter['date']
+    self.subject     = grade_parameter['subject']
     self.grade_name  = grade_parameter['grade_name']
     self.grade_value = grade_parameter['grade_value']
   
@@ -261,37 +315,41 @@ class Grade(db.Model):
 class _Class(db.Model):
   __table__name = 'class'
   id            = db.Column(db.Integer, primary_key=True)
-  
   class_name    = db.Column(db.String(80))
-  
+  class_auth    = db.Column(db.Integer, unique=True, nullable=False)
   student       = db.relationship(
                     'Student',
-                    backref = 'class',
+                    backref = 'classes',
                     cascade = "all,delete",
                     lazy    = 'dynamic'
                   )
                   
   parent        = db.relationship(
                     'Parent',
-                    backref = 'class',
+                    backref = 'classes',
                     cascade = "all,delete",
                     lazy    = 'dynamic'
                   )
                   
   teacher       = db.relationship(
                     'Teacher',
-                    backref = 'class',
+                    backref = 'classes',
                     cascade = "all,delete",
                     lazy    = 'dynamic'
                   )
                   
   board         = db.relationship(
                     'Board',
-                    backref = 'class',
+                    backref = 'classes',
                     cascade = "all,delete",
                     lazy    = 'dynamic'
                   )                 
-                  
+  learn         = db.relationship(
+                    'Learn',
+                    backref = 'classes',
+                    cascade = "all,delete",
+                    lazy    = 'dynamic'
+                  )    
   def create_class(**options):
     class_parm = dict(const_class_parameter)
     for arg in options.items():
@@ -305,18 +363,28 @@ class _Class(db.Model):
   def read_class_by_id(class_id):
     _class = _Class.query.filter_by(id=class_id)
     return _class.first()
-
-  def read_class_by_name(class_name):
-    _class = _Class.query.filter_by(class_name=class_name)
+  
+  def read_class_by_auth(class_auth):
+    _class = _Class.query.filter_by(class_auth=class_auth)
     return _class.first()
-
-  def read_classes_by_name(class_name):
-    _class = _Class.query.filter_by(class_name=class_name)
-    return _class.all()
     
+  def add_to_user(self, user_object):
+    if user_object == None:
+      return None
+    self.user.append(user_object)
+    db.session.commit()
+    return 1
+  
   def __init__(self, class_parameter):
     self.class_name = class_parameter['class_name']
-  
+    # auth
+    auth_num = random.randint(10000000, 2147483647)
+    _class = _Class.query.filter_by(class_auth= auth_num).first()
+    while _class != None:
+      auth_num = random.randint(10000000, 2147483647)
+      _class = _Class.query.filter_by(class_auth=auth_num).first()
+    self.class_auth = auth_num
+    
   def __repr__(self):
     return 'id:%s class_name:%s' % \
            (self.id, self.class_name)
@@ -324,112 +392,115 @@ class _Class(db.Model):
 class Board(db.Model):
   __table__name = 'board'
   id            = db.Column(db.Integer, primary_key=True)
-  board_str     = db.Column(db.String(80))
-  class_id      = db.Column(db.Integer, db.ForeignKey('class.id'))
+  author        = db.Column(db.String(80))
+  date          = db.Column(db.String(80))
+  board_str     = db.Column(db.String(500))
+  class_id      = db.Column(db.Integer, db.ForeignKey('class.id'), nullable=False)
   
-  def create_board(**options):
+  def create_board(class_object, **options):
+    if class_object == None:
+      return None
     board_parm = dict(const_board_parameter)
     for arg in options.items():
       if arg[0] in const_board_parameter:
         board_parm[arg[0]] = arg[1]
     board  = Board(board_parameter=board_parm)
+    board.class_id = class_object.id
     db.session.add(board)
     db.session.commit()
     return board
   
+  def read_board_by_id(board_id):
+    board    = Board.query.filter_by(id=board_id)
+    return board.first()
+  
   def assign_to_class(self, class_object):
+    if class_object == None:
+      return None
     self.class_id = class_object.id
     db.session.commit()
     return 1
-    
+  
   def __init__(self, board_parameter):
+    self.author    = board_parameter['author']
+    self.date      = board_parameter['date']
     self.board_str = board_parameter['board_str']
   
   def __repr__(self):
     return 'id:%s class_id:%s' %\
            (self.id, self.class_id)
-# db.create_all()
-# db.session.commit()
 
-'''
-create_student_by_user
-create_teacher_by_user
-create_parent_by_user
-'''
-def create_student_by_user(user_parameter, student_parameter):
-  # create user
-  user = create_user(user_parameter)
-  if user == None:
-    return None
-  student = Student(student_parameter)
-  user.student = student
-  user.role    = 'Student'
-  db.session.add(student)
-  db.session.commit()
-  return student
-
-def create_teacher_by_user(user_parameter, teacher_parameter):
-  # create user
-  user = create_user(user_parameter)
-  if user == None:
-    return None
-  teacher = Teacher(teacher_parameter)
-  user.teacher = teacher
-  user.role    = 'Teacher'
-  db.session.add(teacher)
-  db.session.commit()
-  return teacher
-
-def create_parent_by_user(user_parameter, parent_parameter):
-  # create user
-  user = create_user(user_parameter)
-  if user == None:
-    return None
-  parent = Parent(parent_parameter)
-  user.parent = parent
-  user.role   = 'Parent'
-  db.session.add(parent)
-  db.session.commit()
-  return parent
-
-'''
-update_user_to_class
-'''
-def update_class_to_user(user_object, class_object):
-  if user_object == None:
-    return None
-  user_object.classes.append(class_object)
-  db.session.commit()
-  return user_object
-
-def update_student_to_user(user_object, student_object):
-  if student_object == None:
-    return None
-  student_object.user_id = user_object.id
-  db.session.commit()
-  return user_object
-
+class Status(db.Model):
+  __table__name = 'status'
+  id            = db.Column(db.Integer, primary_key=True)
+  status        = db.Column(db.String(80))
+  reason        = db.Column(db.String(80))
+  student_id    = db.Column(db.Integer, db.ForeignKey('student.id'), nullable=False)
   
-# class_id = CreateClass("501")
-# print(class_id)
-#CreateStudent("willy", 7, "Willy")
-# print(ReadClass("501"))
-# CreateParentFromName("willy")
-# CreateUserFromAccount("ji32k7au4a83")
-# user   = ReadUserFromAccount("ji32k7au4a83")
-# parent = ReadParentFromName("willy")
+  def create_status(student_object, **options):
+    if student_object == None:
+      return None
+    status_parm = dict(const_status_parameter)
+    for arg in options.items():
+      if arg[0] in const_status_parameter:
+        status_parm[arg[0]] = arg[1]
+    status = Status(student_object, status_parameter=status_parm)
+    db.session.add(status)
+    db.session.commit()
+    return status
+  
+  def read_status_by_id(status_id):
+    status = Status.query.filter_by(id=status_id)
+    return status.first()
+  
+  def assign_to_student(self, student_object):
+    if student_object == None:
+      return None
+    self.student_id = student_object.id
+    return 1
+  
+  def __init__(self, student_object, status_parameter):
+    self.date   = status_parameter['date']
+    self.status = status_parameter['status']
+    self.reason = status_parameter['reason']
+    self.student_id = student_object.id
+  
+  def __repr__(self):
+    return 'id:%s student_id:%s' %\
+           (self.id, self.student_id)
 
-# user.parent = parent
-# db.session.commit()
-# user1_parm = dict(user_parameter)
-# user1_parm['account'] = 'willyy'
-# user1_parm['password'] = 'ji32k7au4a3'
-# CreateUser(user1_parm)
-# print(ReadUserFromAccount("willy"))
-# user1_parm = dict(user_parameter)
-# user1_parm['account'] = 'leo'
-# user1_parm['password'] = 'ji32k7au4a83'
-# student1_parm = dict(student_parameter)
-# student1_parm['student_name'] = 'zzz'
-# CreateStudentWithUser(user1_parm, student1_parm)
+class Learn(db.Model):
+  __table__name = 'learn'
+  id            = db.Column(db.Integer, primary_key=True)
+  author        = db.Column(db.String(80))
+  date          = db.Column(db.String(80))
+  content       = db.Column(db.String(500))
+  class_id      = db.Column(db.Integer, db.ForeignKey('class.id'), nullable=False)
+  
+  def create_learn(class_object, **options):
+    if class_object == None:
+      return None
+    learn_parm = dict(const_learn_parameter)
+    for arg in options.items():
+      if arg[0] in const_learn_parameter:
+        learn_parm[arg[0]] = arg[1]
+    learn  = Learn(class_object, learn_parameter=learn_parm)
+    learn.class_id = class_object.id
+    db.session.add(learn)
+    db.session.commit()
+    return learn
+  
+  def read_learn_by_id(learn_id):
+    learn = Learn.query.filter_by(id=learn_id)
+    return learn.first()
+  
+  def __init__(self, class_object, learn_parameter):
+    self.author    = learn_parameter['author']
+    self.date      = learn_parameter['date']
+    self.content   = learn_parameter['content']
+    self.class_id  = class_object.id
+  
+  def __repr__(self):
+    return 'id:%s class_id:%s' %\
+           (self.id, self.class_id)
 

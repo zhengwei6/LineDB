@@ -7,7 +7,8 @@ const_user_parameter = {
                  }
 
 const_class_parameter  = {
-                  'class_name': 'default'
+                  'class_name': 'default',
+                  
                 }
 
 
@@ -24,10 +25,26 @@ const_teacher_parameter = {
                 }
 
 const_grade_parameter   = {
+                  'date': 'default',
+                  'subject': 'default',
                   'grade_name': 'default',
                   'grade_value':'default'
                 }
 
 const_board_parameter   = {
+                  'author': 'default',
+                  'date': 'default',
                   'board_str': 'default'
+                }
+                
+const_status_parameter  = {
+                  'date': 'default',
+                  'status': 'default',
+                  'reason': 'defualt'
+                }
+
+const_learn_parameter   = {
+                  'author': 'default',
+                  'date': 'default',
+                  'content': 'default'
                 }
