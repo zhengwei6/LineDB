@@ -14,3 +14,6 @@ flask_sqlalchemy
 |date| varchar(80) |
 |board_str| varchar(500) |
 |class_id| int(11) |
+
+## Notion Link
+[Link](https://www.notion.so/Line-Development-2190e8cbc7634275ab5217ce1cd005d1)
